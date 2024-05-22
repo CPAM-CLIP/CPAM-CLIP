@@ -9,8 +9,11 @@ This repo is built on top of [CLIP](https://github.com/openai/CLIP), [MMSegmenta
 
 ```
 conda create -n cpamclip python=3.9
-conda activate cpamclip
-pip install -r requirements.txt 
+conda activate camclip
+pip install torch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1
+pip install openmim
+mim install mmcv==2.0.1 mmengine==0.8.4 mmsegmentation==1.1.1
+pip install ftfy regex yapf==0.40.1
 ```
 
 ## Datasets
