@@ -22,6 +22,10 @@ import os
 import matplotlib.pyplot as plt
 
 
+from featup.util import norm, unnorm
+from featup.plotting import plot_feats, plot_lang_heatmaps
+import torchvision.transforms as T
+
 
 def entropy_sim(probabilities):
     entropy = -torch.sum(probabilities * torch.log2(probabilities), axis=0) # [28, 28]
@@ -42,6 +46,7 @@ class CLIPForSegmentation(BaseSegmentor):
         self.net, _ = clip.load(clip_path, device=device, jit=False)
         
         num = 81
+        
         
         
         
@@ -98,9 +103,13 @@ class CLIPForSegmentation(BaseSegmentor):
     
         self.total_segments = []
         
+        self.upsampler = torch.hub.load("mhamilton723/FeatUp", 'maskclip', use_norm=False).to(device)
+        self.transform = T.Compose([
+            norm
+        ])
         
         
-    def forward_feature(self, img, data_samples, logit_size=None):
+    def forward_feature(self, img, logit_size=None):
         if type(img) == list:
             img = img[0]
 
@@ -134,119 +143,100 @@ class CLIPForSegmentation(BaseSegmentor):
             if w_attn*h_attn +1 != 785:
                 kl_temp_weight = torch.zeros(12,w_attn*h_attn + 1, w_attn*h_attn + 1, dtype=torch.float16).to(self.device) 
                 
+                
+            kl_sizes = [0.25, 0.37, 0.5, 0.75, 0.65, 0.87]
             
+            kl_size_w = [int(w_attn*size) for size in kl_sizes]
+            kl_size_h = [int(h_attn*size) for size in kl_sizes]
             
-            gt_seg = nn.functional.interpolate(data_samples, size=(w_attn, h_attn), mode="bilinear")
-            gt_seg = gt_seg.reshape(-1) # [784]
-            
+
+            logits_flatten = logits_sm.reshape(c,-1) # 50 196
+            ######
+
+            #original size
             softmax_temp = nn.Softmax(dim=1)
+            p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
+            q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
+            M = (p_temp+q_temp) * 0.5
             
-            for label in range(w_attn*h_attn):
-                attn_map = (gt_seg == gt_seg[label]).to(torch.uint8) #[1, 768]
-                kl_temp_weight[:, label+1, 1:] = torch.stack([attn_map] * 12 , dim=0) #[12, 768]
-            
-            
-            # kl_temp_weight[1:, 1:] = 
-            
-            
-            # kl_sizes = [0.25, 0.37, 0.5, 0.75, 0.65, 0.87]
-            
-            # kl_size_w = [int(w_attn*size) for size in kl_sizes]
-            # kl_size_h = [int(h_attn*size) for size in kl_sizes]
-            
-
-            # logits_flatten = logits_sm.reshape(c,-1) # 50 196
-            # ######
-
-            # #original size
-            # softmax_temp = nn.Softmax(dim=1)
-            # p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # M = (p_temp+q_temp) * 0.5
-            
-            # #jhonson
-            # kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
+            #jhonson
+            kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
 
 
-            # kl_temp = 1 - kl_temp
+            kl_temp = 1 - kl_temp
 
 
-            # min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
-            # max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
+            min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
+            max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
 
-            # kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
-            # kl_temp_ori_soft = softmax_temp(kl_temp/P) 
+            kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
+            kl_temp_ori_soft = softmax_temp(kl_temp/P) 
             
 
-            # #  if i == 0:
-            # min_vals = kl_temp_ori_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
-            # max_vals = kl_temp_ori_soft.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
-            # kl_temp_ori = (kl_temp_ori_soft - min_vals) / (max_vals - min_vals + 1e-8)
-            # #  kl_temp_ori = kl_temp_ori_soft
+            #  if i == 0:
+            min_vals = kl_temp_ori_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
+            max_vals = kl_temp_ori_soft.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
+            kl_temp_ori = (kl_temp_ori_soft - min_vals) / (max_vals - min_vals + 1e-8)
+            #  kl_temp_ori = kl_temp_ori_soft
         
-            # logits_no_inter_clone = logits_no_inter.clone()
+            logits_no_inter_clone = logits_no_inter.clone()
 
-            # # multi-scale version
+            # multi-scale version
 
-            # step = 0
-            # attn_list = []
-            # for kl_size_w_temp, kl_size_h_temp in zip(kl_size_w, kl_size_h):
-            #     logits_no_inter = nn.functional.interpolate(logits_no_inter_clone, size=(kl_size_w_temp,kl_size_h_temp), mode='bilinear')
+            step = 0
+            attn_list = []
+            for kl_size_w_temp, kl_size_h_temp in zip(kl_size_w, kl_size_h):
+                logits_no_inter = nn.functional.interpolate(logits_no_inter_clone, size=(kl_size_w_temp,kl_size_h_temp), mode='bilinear')
 
-            #     logits_sm = self.m(logits_no_inter[0,:,:,:]/T)
+                logits_sm = self.m(logits_no_inter[0,:,:,:]/T)
 
-            #     c, w_attn, h_attn = logits_sm.shape
+                c, w_attn, h_attn = logits_sm.shape
 
-            #     logits_flatten = logits_sm.reshape(c,-1) # 50 
-
-
-            #     #fast version
-            #     softmax_temp = nn.Softmax(dim=1)
-            #     p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
-            #     q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
-            #     M = (p_temp+q_temp) * 0.5
+                logits_flatten = logits_sm.reshape(c,-1) # 50 
 
 
-
-            #     #jhonson
-            #     kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
-
-            #     ####
-            #     kl_temp = nn.functional.interpolate(kl_temp.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
-            #     kl_temp = kl_temp.squeeze().permute(1,2,0).reshape(w,h,w_attn , h_attn) # 100 14 14 -> 14 14 10 10
-            #     kl_temp = nn.functional.interpolate(kl_temp, size=(w,h), mode='bilinear') # 14 14 14 14
-            #     kl_temp = kl_temp.permute(2,3,0,1).reshape(w*h,w , h).reshape(w*h,w*h)
-            #     w_attn = w
-            #     h_attn = h
-
-            #     ####
-
-            #     kl_temp = 1 - kl_temp
+                #fast version
+                softmax_temp = nn.Softmax(dim=1)
+                p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
+                q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
+                M = (p_temp+q_temp) * 0.5
 
 
-            #     min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
-            #     max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
 
-            #     kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
-            #     kl_temp_1_soft = softmax_temp(kl_temp/P) 
+                #jhonson
+                kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
 
-            # #    if i == 0:
-            #     min_vals = kl_temp_1_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
-            #     max_vals = kl_temp_1_soft.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
-            #     kl_temp_1 = (kl_temp_1_soft - min_vals) / (max_vals - min_vals  + 1e-8)
+                ####
+                kl_temp = nn.functional.interpolate(kl_temp.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
+                kl_temp = kl_temp.squeeze().permute(1,2,0).reshape(w,h,w_attn , h_attn) # 100 14 14 -> 14 14 10 10
+                kl_temp = nn.functional.interpolate(kl_temp, size=(w,h), mode='bilinear') # 14 14 14 14
+                kl_temp = kl_temp.permute(2,3,0,1).reshape(w*h,w , h).reshape(w*h,w*h)
+                w_attn = w
+                h_attn = h
+
+                ####
+
+                kl_temp = 1 - kl_temp
+
+
+                min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
+                max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
+
+                kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
+                kl_temp_1_soft = softmax_temp(kl_temp/P) 
+
+            #    if i == 0:
+                min_vals = kl_temp_1_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
+                max_vals = kl_temp_1_soft.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
+                kl_temp_1 = (kl_temp_1_soft - min_vals) / (max_vals - min_vals  + 1e-8)
                 
                 
-            #     attn_list.append(kl_temp_1)
+                attn_list.append(kl_temp_1)
 
                 
 
-            # kl_temp_weight[:, 1:, 1:] =(torch.stack(attn_list, dim=0).sum(0) +1.0*kl_temp_ori ) / (len(kl_size_w) + 1.0)  
-            # kl_temp_weight[:,:,0] = 0.0    
-            
-            
-            
-            
-      
+            kl_temp_weight[:, 1:, 1:] =(torch.stack(attn_list, dim=0).sum(0) +1.0*kl_temp_ori ) / (len(kl_size_w) + 1.0)  
+            kl_temp_weight[:,:,0] = 0.0    
 
 
 
@@ -284,22 +274,46 @@ class CLIPForSegmentation(BaseSegmentor):
         entropy = entropy_sim(probability) #[28, 28]
 
         
-        self.prob_thd = 0.5 *2.5/((entropy.min()+entropy.max())/2.0)
+        # self.prob_thd = 0.5 *2.5/((entropy.min()+entropy.max())/2.0)
+        self.prob_thd = 0.5 
         
         
-   
+        feature_input = img # inputs: torch.Size([1, 3, 448, 612])
+        # hr_feats = self.upsampler(img)
+        lr_feats = image_features_temp_ori.permute(0, 2, 1).reshape(1, -1, w, h).to(torch.float32)
+
+        hr_feats = self.upsampler.upsampler(lr_feats, img)
+        # hr_feats = self.upsampler.upsampler(image_features.permute(0, 2, 1).reshape(1, -1, w, h).to(torch.float32), img)
+        # image_features_temp_ori : (1, 768, 512)
+        # lr_feats = seg_logits
+        # seg_logits: torch.Size([1, 512, 28, 37])
+        # 개별 플롯 생성
+        # plot_feats(unnorm(feature_input)[0], lr_feats[0], hr_feats[0])
+
+        # for text_query in self.query_words:
+        #     plot_lang_heatmaps(self.upsampler.model, unnorm(feature_input)[0], lr_feats[0], hr_feats[0], text_query)
+            
+        # breakpoint()
+        hr_feats = hr_feats.permute(0, 2, 3, 1).reshape(1, -1, 512).to(torch.float16) # [1, 448 * 448, 512]
+        featup_logits = hr_feats @ self.query_features.T
+        featup_logits = featup_logits.permute(0, 2, 1).reshape(1, -1, img.shape[-2], img.shape[-1]) 
+        
+
+
     
-        if logit_size == None:
-            logits = nn.functional.interpolate(logits, size=img.shape[-2:], mode='bilinear')
-        else:
-            logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
-        ######
+        # if logit_size == None:
+        #     logits = nn.functional.interpolate(logits, size=img.shape[-2:], mode='bilinear')
+        # else:
+        #     logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
+        # #####
+        
+        # breakpoint()
 
        
-        return logits
+        return featup_logits
 
 
-    def forward_slide(self, img, img_metas, stride=112, crop_size=224, data_samples=None):
+    def forward_slide(self, img, img_metas, stride=112, crop_size=224):
         """Inference by sliding-window with overlap.
         If h_crop > h_img or w_crop > w_img, the small patch will be used to
         decode without padding.
@@ -320,8 +334,6 @@ class CLIPForSegmentation(BaseSegmentor):
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img))
         count_mat = img.new_zeros((batch_size, 1, h_img, w_img))
         
-        gt_seg = data_samples[0].gt_sem_seg.data
-        gt_seg = nn.functional.interpolate(gt_seg.unsqueeze(0).float(), size=(h_img, w_img), mode="bilinear")
         self.window = 0
         for h_idx in range(h_grids):
             for w_idx in range(w_grids):
@@ -332,8 +344,7 @@ class CLIPForSegmentation(BaseSegmentor):
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 crop_img = img[:, :, y1:y2, x1:x2]
-                data_samples = gt_seg[:, :, y1:y2, x1:x2]
-                crop_seg_logit = self.forward_feature(crop_img, data_samples)
+                crop_seg_logit = self.forward_feature(crop_img)
                 preds += nn.functional.pad(crop_seg_logit,
                                (int(x1), int(preds.shape[3] - x2), int(y1),
                                 int(preds.shape[2] - y2)))
@@ -370,9 +381,18 @@ class CLIPForSegmentation(BaseSegmentor):
         self.slide += 1
         
         if self.slide_crop > 0:
-            seg_logits = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop, data_samples)
+            seg_logits = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop)
         else:
             seg_logits = self.forward_feature(inputs, batch_img_metas[0]['ori_shape'])
+        
+        # feature_input = inputs # inputs: torch.Size([1, 3, 448, 612])
+        # print(f"feature_input: {feature_input.shape}")
+        # hr_feats = self.upsampler(feature_input)
+        # lr_feats = self.upsampler.model(feature_input)
+        # # lr_feats = seg_logits
+        # print(f"seg_logits: {lr_feats.shape}") # seg_logits: torch.Size([1, 21, 366, 500])
+        # # seg_logits: torch.Size([1, 512, 28, 37])
+        # plot_feats(unnorm(feature_input)[0], lr_feats[0], hr_feats[0])
 
         return self.postprocess_result(seg_logits, data_samples)
     
