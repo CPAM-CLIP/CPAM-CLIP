@@ -1,5 +1,5 @@
-sky
-person
+sky, wall, tree, wood, grass, road, sea, river, mountain, sands, desk, bed, building, cloud, lamp, door, window, wardrobe, ceiling, shelf, curtain, stair, floor, hill, rail, fence
+person, person in shirt, person in jeans, person in dress, person in sweater, person in skirt, person in jacket, body
 bicycle
 car
 motorcycle

@@ -4,7 +4,7 @@ _base_ = './base_config.py'
 model = dict(
     name_path='./configs/cls_coco_object.txt',
     logit_scale=50,
-    prob_thd=0.5
+    prob_thd=0.3
 )
 
 # dataset settings

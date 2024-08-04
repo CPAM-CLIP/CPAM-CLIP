@@ -3,9 +3,12 @@ _base_ = './base_config.py'
 # model settings
 model = dict(
     name_path='./configs/cls_voc21.txt',
-    logit_scale=50,
-    prob_thd=0.5,
-    # prob_thd=0.01
+    # logit_scale=50,
+    # prob_thd=0.5,
+    # # prob_thd=0.01
+    logit_scale=65,
+    prob_thd=0.25,
+    area_thd=0.1
 )
 
 # dataset settings

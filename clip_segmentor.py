@@ -274,17 +274,17 @@ class CLIPForSegmentation(BaseSegmentor):
             logits_no_inter = logits
 
 
-        attr_logits = image_features_temp_ori @ self.query_features.T
-        out_dim = attr_logits.shape[-1]
-        attr_logits = attr_logits.permute(0, 2, 1).reshape(-1, out_dim, w, h)
+        # attr_logits = image_features_temp_ori @ self.query_features.T
+        # out_dim = attr_logits.shape[-1]
+        # attr_logits = attr_logits.permute(0, 2, 1).reshape(-1, out_dim, w, h)
 
         
         
-        probability = softmax_temp(attr_logits*50).squeeze() # [1, 21, 28, 28]
-        entropy = entropy_sim(probability) #[28, 28]
+        # probability = softmax_temp(attr_logits*50).squeeze() # [1, 21, 28, 28]
+        # entropy = entropy_sim(probability) #[28, 28]
 
         
-        self.prob_thd = 0.5 *2.5/((entropy.min()+entropy.max())/2.0)
+        # self.prob_thd = 0.5 *2.5/((entropy.min()+entropy.max())/2.0)
         
         
    

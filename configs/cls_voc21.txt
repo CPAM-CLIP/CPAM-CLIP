@@ -1,4 +1,4 @@
-background
+sky, wall, tree, wood, grass, road, sea, river, mountain, sands, desk, bed, building, cloud, lamp, door, window, wardrobe, ceiling, shelf, curtain, stair, floor, hill, rail, fence
 aeroplane
 bicycle
 bird
@@ -9,16 +9,16 @@ car
 cat
 chair
 cow
-diningtable
+table
 dog
 horse
 motorbike
-person
+person, person in shirt, person in jeans, person in dress, person in sweater, person in skirt, person in jacket
 pottedplant
 sheep
 sofa
 train
-tv monitor
+television monitor, tv monitor, monitor, television, screen
 black
 light blue
 blue
