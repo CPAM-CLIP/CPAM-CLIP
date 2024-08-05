@@ -146,8 +146,14 @@ class CLIPForSegmentation(BaseSegmentor):
             q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
             M = (p_temp+q_temp) * 0.5
             
-            #jhonson
+            # #jhonson
             kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
+            
+            # # KL 
+            # kl_temp =torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(q_temp + 1e-8)), dim=0)
+
+            # cossim
+            # kl_temp = F.cosine_similarity(p_temp, q_temp, dim=0)
 
 
             kl_temp = 1 - kl_temp
@@ -156,15 +162,15 @@ class CLIPForSegmentation(BaseSegmentor):
             min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
             max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
 
-            kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
-            kl_temp_ori_soft = softmax_temp(kl_temp/P) 
+            kl_temp_ori_soft = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
+            kl_temp_ori_soft = softmax_temp(kl_temp_ori_soft/P) 
             
 
             #  if i == 0:
             min_vals = kl_temp_ori_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
             max_vals = kl_temp_ori_soft.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
             kl_temp_ori = (kl_temp_ori_soft - min_vals) / (max_vals - min_vals + 1e-8)
-            #  kl_temp_ori = kl_temp_ori_soft
+            kl_temp_ori = kl_temp_ori_soft
         
             logits_no_inter_clone = logits_no_inter.clone()
 
@@ -190,27 +196,40 @@ class CLIPForSegmentation(BaseSegmentor):
 
 
 
-                #jhonson
+                # #jhonson
                 kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
-
+                
+                # # KL 
+                # kl_temp =torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(q_temp + 1e-8)), dim=0)
+                
+                # cossim
+                # kl_temp = F.cosine_similarity(p_temp, q_temp, dim=0)
+                # breakpoint()
+                # w_attn, h_attn = kl_size_w_temp, kl_size_h_temp
                 ####
-                kl_temp = nn.functional.interpolate(kl_temp.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
-                kl_temp = kl_temp.squeeze().permute(1,2,0).reshape(w,h,w_attn , h_attn) # 100 14 14 -> 14 14 10 10
-                kl_temp = nn.functional.interpolate(kl_temp, size=(w,h), mode='bilinear') # 14 14 14 14
-                kl_temp = kl_temp.permute(2,3,0,1).reshape(w*h,w , h).reshape(w*h,w*h)
+                # kl_temp_resize = nn.functional.interpolate(kl_temp.unsqueeze(0).unsqueeze(0), size=(w_attn * h_attn,w_attn * h_attn), mode='bilinear')
+                kl_temp_resize = nn.functional.interpolate(kl_temp_resize.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
+                # kl_temp_resize = nn.functional.interpolate(kl_temp_resize.reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
+                kl_temp_resize = kl_temp_resize.squeeze().permute(1,2,0).reshape(w,h,w_attn , h_attn) # 100 14 14 -> 14 14 10 10
+                kl_temp_resize = nn.functional.interpolate(kl_temp_resize, size=(w,h), mode='bilinear') # 14 14 14 14
+                kl_temp_resize = kl_temp_resize.permute(2,3,0,1).reshape(w*h,w , h).reshape(w*h,w*h)
                 w_attn = w
                 h_attn = h
 
                 ####
 
-                kl_temp = 1 - kl_temp
+                kl_temp_resize = 1 - kl_temp_resize
+                
+                
+                # kl_temp_1 = kl_temp_resize
 
 
-                min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
-                max_vals = kl_temp.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
 
-                kl_temp = (kl_temp - min_vals) / (max_vals - min_vals + 1e-8)
-                kl_temp_1_soft = softmax_temp(kl_temp/P) 
+                min_vals = kl_temp_resize.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
+                max_vals = kl_temp_resize.max(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find maximum values along dim=2, keep dimensions
+
+                kl_temp_resize = (kl_temp_resize - min_vals) / (max_vals - min_vals + 1e-8)
+                kl_temp_1_soft = softmax_temp(kl_temp_resize/P) 
 
             #    if i == 0:
                 min_vals = kl_temp_1_soft.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions

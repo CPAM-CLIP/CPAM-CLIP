@@ -9,7 +9,7 @@ model = dict(
 
 # dataset settings
 dataset_type = 'COCOObjectDataset'
-data_root = ''
+data_root = '/SHARE_ST/icl/Neurips2024/zeroseg_kdu_khy/data/coco_stuff164k'
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
@@ -30,5 +30,5 @@ test_dataloader = dict(
         data_root=data_root,
         reduce_zero_label=False,
         data_prefix=dict(
-            img_path='images/val2017_obj', seg_map_path='data/val2017_obj'),
+            img_path='images/val2017', seg_map_path='annotations/val2017'),
         pipeline=test_pipeline))
