@@ -6,11 +6,15 @@ import custom_datasets
 from mmengine.config import Config
 from mmengine.runner import Runner
 
+import sys
+import random
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description='SCLIP evaluation with MMSeg')
     parser.add_argument('--config', default='')
-    parser.add_argument('--work-dir', default='./work_logs/')
+    # parser.add_argument('--work-dir', default='./work_logs/')
+    parser.add_argument('--work-dir', default='./hyperparameter/')
     parser.add_argument(
         '--show', action='store_true', help='show prediction results')
     parser.add_argument(
@@ -26,6 +30,8 @@ def parse_args():
     # will pass the `--local-rank` parameter to `tools/train.py` instead
     # of `--local_rank`.
     parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
+
+    
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -58,6 +64,12 @@ def main():
     cfg = Config.fromfile(args.config)
     cfg.launcher = args.launcher
     cfg.work_dir = args.work_dir
+    # breakpoint()
+    cfg.model['T'] = random.randrange(5, 25) * 0.01 #[0.05 - 0.3]
+    cfg.model['P'] = random.randrange(5, 25) * 0.01 #[0.05 - 0.3]
+    size_len = random.randrange(3, 8)
+    cfg.model['kl_sizes'] = [ random.random() for _ in range(size_len)]
+    
     trigger_visualization_hook(cfg, args)
 
     runner = Runner.from_cfg(cfg)

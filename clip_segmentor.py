@@ -20,8 +20,9 @@ import os
 
 
 import matplotlib.pyplot as plt
-
-import time
+import random
+# from mmengine.logging import print_log
+from mmengine.logging import MMLogger
 
 
 def entropy_sim(probabilities):
@@ -31,7 +32,7 @@ def entropy_sim(probabilities):
 
 @MODELS.register_module()
 class CLIPForSegmentation(BaseSegmentor):
-    def __init__(self, clip_path, name_path, device=torch.device('cuda'),
+    def __init__(self, clip_path, name_path, T, P, kl_sizes, device=torch.device('cuda'),
                     pamr_steps=0, pamr_stride=(8,16), prob_thd=0.0, logit_scale=40, 
                     slide_stride=224, slide_crop=448, area_thd=None):
         
@@ -52,8 +53,21 @@ class CLIPForSegmentation(BaseSegmentor):
         self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
         self.query_idx = self.query_idx[:-num ] 
         
+        
+        # Initialize the logger
+        logger = MMLogger.get_instance(name='mmengine')
 
 
+        self.T = T 
+        self.P = P
+                
+        self.kl_sizes = kl_sizes
+        
+        # logger.info("=====================================")
+        # logger.info(f"T: {self.T}, P: {self.P}, kl_sizes: {self.kl_sizes}")
+        # logger.info("=====================================")
+        
+        
 
         query_features = []
         self.query_words = query_words
@@ -98,7 +112,6 @@ class CLIPForSegmentation(BaseSegmentor):
         
     
         self.total_segments = []
-        self.total_time = 0
     def forward_feature(self, img, logit_size=None):
         if type(img) == list:
             img = img[0]
@@ -121,8 +134,10 @@ class CLIPForSegmentation(BaseSegmentor):
             
             kl_temp_weight = self.kl_temp_weight 
            
-            T = 0.1 # 0.1 # 0.2 for voc
-            P = 0.1 #[0.1,0.1,0.1,0.1] # 0.1
+            # T = 0.1 # 0.1 # 0.2 for voc
+            # P = 0.1 #[0.1,0.1,0.1,0.1] # 0.1
+            T = self.T
+            P = self.P
                 
             
                 
@@ -134,7 +149,8 @@ class CLIPForSegmentation(BaseSegmentor):
                 kl_temp_weight = torch.zeros(12,w_attn*h_attn + 1, w_attn*h_attn + 1, dtype=torch.float16).to(self.device) 
                 
                 
-            kl_sizes = [0.25, 0.37, 0.5, 0.75, 0.65, 0.87]
+            # kl_sizes = [0.25, 0.37, 0.5, 0.75, 0.65, 0.87]
+            kl_sizes = self.kl_sizes
             
             kl_size_w = [int(w_attn*size) for size in kl_sizes]
             kl_size_h = [int(h_attn*size) for size in kl_sizes]
@@ -145,29 +161,15 @@ class CLIPForSegmentation(BaseSegmentor):
 
             #original size
             softmax_temp = nn.Softmax(dim=1)
-            # p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # M = (p_temp+q_temp) * 0.5
+            p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
+            q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
+            M = (p_temp+q_temp) * 0.5
             
-            # #jhonson
-            # kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
-            
-            
-            
-            # image_features : [1, 754, 512]
-            
-            # p_temp = image_features.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # q_temp = image_features.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
-            # M = (p_temp+q_temp) * 0.5
+            #jhonson
+            kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
 
-            # kl_temp = 1 - kl_temp
-            
-            # kl_temp = F.cosine_similarity(p_temp, q_temp, dim=0)
-            reshaped_image_features = image_features.permute(0, 2, 1) # [1, 512, 784]
-            kl_temp = F.cosine_similarity(reshaped_image_features.unsqueeze(-1), reshaped_image_features.unsqueeze(-2), dim=-3).squeeze() #[1, 784, 784]
 
-            
-            
+            kl_temp = 1 - kl_temp
 
 
             min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
@@ -189,39 +191,29 @@ class CLIPForSegmentation(BaseSegmentor):
 
             step = 0
             attn_list = []
-            # c, w_attn, h_attn = logits_sm.shape
-            c, w, h = logits_sm.shape
-
-            reshaped_image_features = image_features.permute(0, 2, 1).reshape(1, -1, w_attn, h_attn) #[1, 256, 28, 28]
-
             for kl_size_w_temp, kl_size_h_temp in zip(kl_size_w, kl_size_h):
-                # logits_no_inter = nn.functional.interpolate(logits_no_inter_clone, size=(kl_size_w_temp,kl_size_h_temp), mode='bilinear')
-                w_attn, h_attn = kl_size_w_temp, kl_size_h_temp
-                
-                image_features_no_iter = nn.functional.interpolate(reshaped_image_features, size=(kl_size_w_temp,kl_size_h_temp), mode='bilinear') #[1, 256, kl_size_w_temp, kl_size_h_temp]
+                logits_no_inter = nn.functional.interpolate(logits_no_inter_clone, size=(kl_size_w_temp,kl_size_h_temp), mode='bilinear')
 
-                # logits_sm = self.m(image_features_no_iter[0,:,:,:]/T)
+                logits_sm = self.m(logits_no_inter[0,:,:,:]/T)
 
+                c, w_attn, h_attn = logits_sm.shape
 
-                # logits_flatten = logits_sm.reshape(c,-1) # [256, kl_size_w_temp * kl_size_h_temp] 
+                logits_flatten = logits_sm.reshape(c,-1) # 50 
 
 
                 #fast version
                 softmax_temp = nn.Softmax(dim=1)
-                image_features_no_iter = image_features_no_iter.reshape(1, -1, kl_size_w_temp*kl_size_h_temp)
-                # p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
-                # q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
-                # M = (p_temp+q_temp) * 0.5
-                
-                kl_temp = F.cosine_similarity(image_features_no_iter.unsqueeze(-1), image_features_no_iter.unsqueeze(-2), dim=-3).squeeze() #[1, 784, 784]
+                p_temp = logits_flatten.unsqueeze(2).expand(c, w_attn * h_attn, w_attn * h_attn)
+                q_temp = logits_flatten.unsqueeze(1).expand(c, w_attn * h_attn, w_attn * h_attn)
+                M = (p_temp+q_temp) * 0.5
 
 
-                # #jhonson
-                # kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
+
+                #jhonson
+                kl_temp =0.5 *(torch.sum(logits_flatten.unsqueeze(2) *  (torch.log(p_temp + 1e-8) - torch.log(M + 1e-8)), dim=0) + torch.sum(logits_flatten.unsqueeze(1) *  (torch.log(q_temp + 1e-8) - torch.log(M + 1e-8)), dim=0))
 
                 ####
-                # kl_temp = nn.functional.interpolate(kl_temp.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
-                kl_temp = nn.functional.interpolate(kl_temp.reshape(1, w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
+                kl_temp = nn.functional.interpolate(kl_temp.unsqueeze(0).reshape(1,w_attn * h_attn, w_attn , h_attn), size=(w,h), mode='bilinear') #1 100 14 14
                 kl_temp = kl_temp.squeeze().permute(1,2,0).reshape(w,h,w_attn , h_attn) # 100 14 14 -> 14 14 10 10
                 kl_temp = nn.functional.interpolate(kl_temp, size=(w,h), mode='bilinear') # 14 14 14 14
                 kl_temp = kl_temp.permute(2,3,0,1).reshape(w*h,w , h).reshape(w*h,w*h)
@@ -230,7 +222,7 @@ class CLIPForSegmentation(BaseSegmentor):
 
                 ####
 
-                # kl_temp = 1 - kl_temp
+                kl_temp = 1 - kl_temp
 
 
                 min_vals = kl_temp.min(dim=-1, keepdim=True)[0].expand( w_attn * h_attn, w_attn * h_attn)  # Find minimum values along dim=2, keep dimensions
@@ -354,7 +346,6 @@ class CLIPForSegmentation(BaseSegmentor):
         return logits
 
     def predict(self, inputs, data_samples):
-        start_time = time.time()
         if data_samples is not None:
             batch_img_metas = [
                 data_sample.metainfo for data_sample in data_samples
@@ -374,9 +365,7 @@ class CLIPForSegmentation(BaseSegmentor):
             seg_logits = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop)
         else:
             seg_logits = self.forward_feature(inputs, batch_img_metas[0]['ori_shape'])
-            
-        end_time = time.time()
-        self.total_time += end_time - start_time 
+
         return self.postprocess_result(seg_logits, data_samples)
     
     def postprocess_result(self, seg_logits, data_samples):

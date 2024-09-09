@@ -2,6 +2,7 @@
 model = dict(
     type='CLIPForSegmentation',
     clip_path='ViT-B/16'
+    
 )
 
 test_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU'])
