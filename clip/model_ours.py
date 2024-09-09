@@ -14,8 +14,6 @@ import torchvision.transforms.functional as VF
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-
-import copy
 class Bottleneck(nn.Module):
     expansion = 4
 
@@ -62,44 +60,6 @@ class Bottleneck(nn.Module):
         return out
 
 
-# class AttentionPool2d(nn.Module):
-#     def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
-#         super().__init__()
-#         self.positional_embedding = nn.Parameter(torch.randn(spacial_dim ** 2 + 1, embed_dim) / embed_dim ** 0.5)
-#         self.k_proj = nn.Linear(embed_dim, embed_dim)
-#         self.q_proj = nn.Linear(embed_dim, embed_dim)
-#         self.v_proj = nn.Linear(embed_dim, embed_dim)
-#         self.c_proj = nn.Linear(embed_dim, output_dim or embed_dim)
-#         self.num_heads = num_heads
-
-#     def forward(self, x, return_all_tokens=False):
-#         x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3]).permute(2, 0, 1)  # NCHW -> (HW)NC
-#         x = torch.cat([x.mean(dim=0, keepdim=True), x], dim=0)  # (HW+1)NC
-#         x = x + self.positional_embedding[:, None, :].to(x.dtype)  # (HW+1)NC
-#         x, _ = F.multi_head_attention_forward(
-#             query=x, key=x, value=x,
-#             embed_dim_to_check=x.shape[-1],
-#             num_heads=self.num_heads,
-#             q_proj_weight=self.q_proj.weight,
-#             k_proj_weight=self.k_proj.weight,
-#             v_proj_weight=self.v_proj.weight,
-#             in_proj_weight=None,
-#             in_proj_bias=torch.cat([self.q_proj.bias, self.k_proj.bias, self.v_proj.bias]),
-#             bias_k=None,
-#             bias_v=None,
-#             add_zero_attn=False,
-#             dropout_p=0,
-#             out_proj_weight=self.c_proj.weight,
-#             out_proj_bias=self.c_proj.bias,
-#             use_separate_proj_weight=True,
-#             training=self.training,
-#             need_weights=False
-#         )
-#         if return_all_tokens:
-#             return x
-#         else:
-#             return x[0]
-        
 class AttentionPool2d(nn.Module):
     def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
         super().__init__()
@@ -138,10 +98,6 @@ class AttentionPool2d(nn.Module):
         x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3]).permute(2, 0, 1)  # NCHW -> (HW)NC
         x = torch.cat([x.mean(dim=0, keepdim=True), x], dim=0)  # (HW+1)NC
 
-        # cls_pos = self.positional_embedding[0:1, :]
-        # spatial_pos = F.interpolate(self.positional_embedding[1:,].reshape(1, self.spacial_dim, self.spacial_dim, self.embed_dim).permute(0, 3, 1, 2), size=(H, W), mode='bilinear')
-        # spatial_pos = spatial_pos.reshape(self.embed_dim, H*W).permute(1, 0)
-        # positional_embedding = torch.cat([cls_pos, spatial_pos], dim=0)
         
         if if_pos:
             pos_embedding = self.interpolate_pos_encoding(x, H, W)
@@ -334,7 +290,7 @@ class VisionTransformer(nn.Module):
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
 
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
-
+        
         if x.shape[1] != self.positional_embedding.shape[0]:
             x = x + self.interpolate_pos_encoding(x, w, h).to(x.dtype)
         else:
@@ -343,107 +299,23 @@ class VisionTransformer(nn.Module):
         x = self.ln_pre(x)           
 
         x = x.permute(1, 0, 2)  # NLD -> LND
-
         
-        self.version = 0
         self.window = window
         self.slide = slide
-        cas = False
         
-        
-#         for blk in self.transformer.resblocks[-last_n_layers:]:
-#             if ignore_residual:
-#                 output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
+        for blk in self.transformer.resblocks[:-1]:
+            x = blk(x)
 
-#                 x = blk(x)
-                
-                
-        ##SCLIP
+        self.intermediate_feat_before_last = x
+        for blk in self.transformer.resblocks[-1:]:
+            x = x + self.custom_dual_attn(blk.attn, blk.ln_1(x), csa=csa)
+            x = x + blk.mlp(blk.ln_2(x))
+        self.intermediate_feat_after_last = x
         
-        if self.version == 0:
-            for blk in self.transformer.resblocks[:-1]:
-                x = blk(x)
-            self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[-1:]:
-                output = self.custom_attn(blk.attn, blk.ln_1(x), img, with_attn = False, csa=True)
-              #  x = output
-                x = x + output
-                x = x + blk.mlp(blk.ln_2(x))
-        
-        ##Ours
-        if self.version == 1:
-         #   x_global = self.transformer(x)
-         #   self.intermediate_feat_before_last = x
-            t = -1
-            
-            for blk in self.transformer.resblocks[:t]:
-                x = blk(x)
-
-            self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[t:]:
-                #x = self.custom_dual_attn(blk.attn, blk.ln_1(x), csa=csa)
-                x = x + self.custom_dual_attn(blk.attn, blk.ln_1(x), csa=csa)
-                x = x + blk.mlp(blk.ln_2(x))
-            self.intermediate_feat_after_last = x
-        
-        ##Vanilia CLIP
-        if self.version == 2:
-            x = self.transformer(x)
-            
-        ##identity matrix of CLIP
-        if self.version == 3:
-         #   self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[:-1]:
-                x = blk(x)
-
-            self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[-1:]:
-                x = x + self.custom_dual_attn(blk.attn, blk.ln_1(x), csa=csa)
-                x = x + blk.mlp(blk.ln_2(x))
-            self.intermediate_feat_after_last = x
-            
-            
-        ## middle internvention
-        if self.version == 4:
-            sum_all = 0
-            
-            for blk in self.transformer.resblocks[:]:
-                output = self.custom_attn(blk.attn, blk.ln_1(x), img, with_attn = False, csa=False)
-                sum_all += output
-                x = x + output
-                x = x + blk.mlp(blk.ln_2(x))  
-                
-            x = sum_all  
-            
-        if self.version == 5:
-            for blk in self.transformer.resblocks[:-1]:
-                x = blk(x)
-            self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[-1:]:
-                output, weight = self.custom_attn(blk.attn, blk.ln_1(x), img, with_attn = True, csa=True)
-                x = x + output
-                x = x + blk.mlp(blk.ln_2(x))
-                
-        ##Ours
-        if self.version == 5:
-         #   x_global = self.transformer(x)
-         #   self.intermediate_feat_before_last = x
-            t = -1
-            
-            for blk in self.transformer.resblocks[:t]:
-                x = blk(x)
-
-            self.intermediate_feat_before_last = x
-            for blk in self.transformer.resblocks[t:]:
-                x = self.custom_dual_attn(blk.attn, blk.ln_1(x), csa=True)
-             #   x = x + blk.mlp(blk.ln_2(x))
-            self.intermediate_feat_after_last = x
-                
-                
         x = x.permute(1, 0, 2)  # LND -> NLDd
             
         if return_all:
-            return self.ln_post(x) @ self.proj #, self.ln_post(x_global) @ self.proj
+            return self.ln_post(x) @ self.proj
 
         x = self.ln_post(x[:, 0, :])
         
@@ -482,24 +354,17 @@ class VisionTransformer(nn.Module):
         q = q.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
         k = k.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
         v = v.contiguous().view(-1, bsz * num_heads, head_dim).transpose(0, 1)
-        
-        size = [0.63,0.75,0.87]
-        w = 28
-        h=28
 
         if csa:
             q_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             k_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            attn_weights = F.softmax(q_attn, dim=-1) + F.softmax(k_attn, dim=-1) #+ 
-            
+            attn_weights = F.softmax(q_attn, dim=-1) + F.softmax(k_attn, dim=-1) #+ F.softmax(torch.bmm(q * scale, k.transpose(1, 2)), dim=-1)
         else:
             attn_weights = torch.bmm(q * scale, k.transpose(1, 2))
             attn_weights = F.softmax(attn_weights, dim=-1)
 
         if return_attn:
             return attn_weights
-        
-        
 
         attn_output = torch.bmm(attn_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
@@ -525,16 +390,7 @@ class VisionTransformer(nn.Module):
 
     
         if weight == None:
-            # qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            # attn_weights = F.softmax(qq_attn, dim=-1)
-            # attn_output = torch.bmm(attn_weights, v).transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
-            
             attn_output = v.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
-        # elif csa == True:
-        #     qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-        #     attn_weights = F.softmax(qq_attn, dim=-1)
-        #     attn_output = torch.bmm(attn_weights, v)
-        #     attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
         else:
             attn_output = torch.bmm(weight, v).transpose(0, 1).contiguous().view(-1, bsz, embed_dim)
         attn_output = attn_layer.out_proj(attn_output)
@@ -686,7 +542,8 @@ class CLIP(nn.Module):
     def encode_image(self, image, window, slide, return_all=False, csa=False):
         return self.visual(image.type(self.dtype), window, slide, return_all=return_all, csa=csa)
 
-    def encode_text(self, text, all_token = False):
+    def encode_text(self, text):
+        
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
 
         x = x + self.positional_embedding.type(self.dtype)
@@ -694,11 +551,8 @@ class CLIP(nn.Module):
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
-        
-        if all_token == False:
-            return x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
-        elif all_token == True:
-            return x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection, x@ self.text_projection
+
+        return x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
 
     def forward(self, image, text):
         image_features = self.encode_image(image)
