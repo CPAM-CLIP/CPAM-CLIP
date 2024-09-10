@@ -43,15 +43,15 @@ class CLIPForSegmentation(BaseSegmentor):
         super().__init__(data_preprocessor=data_preprocessor)
         self.net, _ = clip.load(clip_path, device=device, jit=False)
         
-        num = 81
+        self.num = 81
         
         
         
         query_words, self.query_idx = get_cls_idx(name_path)
-        self.num_queries = len(query_words) -num
-        self.num_classes = max(self.query_idx) + 1 -num 
+        self.num_queries = len(query_words) -self.num
+        self.num_classes = max(self.query_idx) + 1 -self.num 
         self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
-        self.query_idx = self.query_idx[:-num ] 
+        self.query_idx = self.query_idx[:-self.num ] 
         
         
         # Initialize the logger
@@ -81,10 +81,9 @@ class CLIPForSegmentation(BaseSegmentor):
                 feature /= feature.norm()
                 query_features.append(feature.unsqueeze(0))
                 
-
         
         self.query_features_ori = torch.cat(query_features, dim=0)
-        self.query_features = self.query_features_ori[:-num,:]
+        self.query_features = self.query_features_ori[:-self.num,:]
         
         
         self.dtype = self.query_features.dtype
@@ -122,6 +121,36 @@ class CLIPForSegmentation(BaseSegmentor):
         image_features = image_features[:, 1:]
         
         logits = image_features @ self.query_features_ori.T
+        
+        
+        #! 이 logits중에서 -> PAC에 해당하는걸 sorting해서 k개만 남기고 -> 그걸 다시 obj에 붙여서 text emb만든다음 -> 그다음 다시 logit만들기 진행 
+        # get PAC 
+        pac_start = len(self.query_features_ori) - self.num 
+        
+        pac_logits = logits[..., pac_start:] #[1, 784, 81]
+        k = 5
+        _, indices = torch.topk(pac_logits.reshape(-1), k) #[5]         # convert indices into cls num 
+        cls_num = [i // 784 for i in indices] #[]
+        selected_pac_words = [self.query_words[i + pac_start] for i in cls_num ]
+        # 하나의 문자열로 합치기 
+        print(selected_pac_words)
+        selected_pac_words = [' '.join(selected_pac_words)]
+        temp_query_features = []
+        with torch.no_grad():
+            for qw in self.query_words:
+                query = clip.tokenize([temp(selected_pac_words[0] + ' ' +qw) for temp in openai_imagenet_template]).to(self.device)
+                feature = self.net.encode_text(query)
+                feature /= feature.norm(dim=-1, keepdim=True)
+                feature = feature.mean(dim=0)
+                feature /= feature.norm()
+                temp_query_features.append(feature.unsqueeze(0))
+                
+        
+        temp_query_features_ori = torch.cat(temp_query_features, dim=0)
+        
+        
+        logits = image_features @ temp_query_features_ori.T
+        
         patch_size = self.net.visual.patch_size
         w, h = img[0].shape[-2] // patch_size, img[0].shape[-1] // patch_size
         out_dim = logits.shape[-1]

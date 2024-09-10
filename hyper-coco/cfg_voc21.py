@@ -17,13 +17,17 @@ load_from = None
 log_level = 'INFO'
 log_processor = dict(by_epoch=False)
 model = dict(
-    P=0.14,
-    T=0.17,
+    P=0.2,
+    T=0.09,
     clip_path='ViT-B/16',
     kl_sizes=[
-        0.9749851923788148,
-        0.804973056633385,
-        0.6138345976796581,
+        0.8740030888922894,
+        0.7883244540065957,
+        0.39557169903567346,
+        0.5177720690896945,
+        0.30758696333316216,
+        0.8996076111887488,
+        0.6497661579551135,
     ],
     logit_scale=50,
     name_path='./configs/cls_voc21.txt',
@@ -75,4 +79,4 @@ visualizer = dict(
     vis_backends=[
         dict(type='LocalVisBackend'),
     ])
-work_dir = './hyperparameter/'
+work_dir = './hyper-coco'

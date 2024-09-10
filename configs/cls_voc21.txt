@@ -19,35 +19,35 @@ sheep
 sofa
 train
 tv monitor
-black  
-light blue 
-blue 
-dark blue 
-light brown 
-brown 
-dark brown 
-light green 
-green 
-dark green 
-light grey 
-grey 
-dark grey 
-light orange 
-orange 
-dark orange 
-light pink 
-pink 
-dark pink 
-light purple 
-purple 
-dark purple 
-light red 
-red 
-dark red 
-white 
-light yellow 
-yellow 
-dark yellow 
+black
+light blue
+blue
+dark blue
+light brown
+brown
+dark brown
+light green
+green
+dark green
+light grey
+grey
+dark grey
+light orange
+orange
+dark orange
+light pink
+pink
+dark pink
+light purple
+purple
+dark purple
+light red
+red
+dark red
+white
+light yellow
+yellow
+dark yellow
 plain 
 striped 
 dotted 

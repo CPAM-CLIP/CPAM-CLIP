@@ -1,5 +1,5 @@
-data_root = '/SHARE_ST/icl/Neurips2024/zeroseg_kdu_khy/data/VOCdevkit/VOC2012'
-dataset_type = 'PascalVOCDataset'
+data_root = '/SHARE_ST/icl/Neurips2024/zeroseg_kdu_khy/data/VOCdevkit/VOC2010'
+dataset_type = 'PascalContext60Dataset'
 default_hooks = dict(
     checkpoint=dict(by_epoch=False, interval=2000, type='CheckpointHook'),
     logger=dict(interval=50, log_metric_by_epoch=False, type='LoggerHook'),
@@ -17,16 +17,19 @@ load_from = None
 log_level = 'INFO'
 log_processor = dict(by_epoch=False)
 model = dict(
-    P=0.14,
-    T=0.17,
+    P=0.13,
+    T=0.13,
     clip_path='ViT-B/16',
     kl_sizes=[
-        0.9749851923788148,
-        0.804973056633385,
-        0.6138345976796581,
+        0.8818000732589452,
+        0.6986692183215663,
+        0.921282873960587,
+        0.31929478988312043,
+        0.5740025086474836,
+        0.9426262948605687,
     ],
     logit_scale=50,
-    name_path='./configs/cls_voc21.txt',
+    name_path='./configs/cls_context60.txt',
     prob_thd=0.5,
     type='CLIPForSegmentation')
 resume = False
@@ -34,11 +37,11 @@ test_cfg = dict(type='TestLoop')
 test_dataloader = dict(
     batch_size=1,
     dataset=dict(
-        ann_file='ImageSets/Segmentation/val.txt',
+        ann_file='ImageSets/SegmentationContext/val.txt',
         data_prefix=dict(
-            img_path='JPEGImages', seg_map_path='SegmentationClass'),
+            img_path='JPEGImages', seg_map_path='SegmentationClassContext'),
         data_root=
-        '/SHARE_ST/icl/Neurips2024/zeroseg_kdu_khy/data/VOCdevkit/VOC2012',
+        '/SHARE_ST/icl/Neurips2024/zeroseg_kdu_khy/data/VOCdevkit/VOC2010',
         pipeline=[
             dict(type='LoadImageFromFile'),
             dict(keep_ratio=True, scale=(
@@ -48,7 +51,7 @@ test_dataloader = dict(
             dict(type='LoadAnnotations'),
             dict(type='PackSegInputs'),
         ],
-        type='PascalVOCDataset'),
+        type='PascalContext60Dataset'),
     num_workers=4,
     persistent_workers=True,
     sampler=dict(shuffle=False, type='DefaultSampler'))
@@ -75,4 +78,4 @@ visualizer = dict(
     vis_backends=[
         dict(type='LocalVisBackend'),
     ])
-work_dir = './hyperparameter/'
+work_dir = './hyper-context'
