@@ -24,8 +24,8 @@ import random
 # from mmengine.logging import print_log
 from mmengine.logging import MMLogger
 
-
 from sklearn.cluster import DBSCAN
+
 
 def entropy_sim(probabilities):
     entropy = -torch.sum(probabilities * torch.log2(probabilities), axis=0) # [28, 28]
@@ -45,16 +45,15 @@ class CLIPForSegmentation(BaseSegmentor):
         super().__init__(data_preprocessor=data_preprocessor)
         self.net, _ = clip.load(clip_path, device=device, jit=False)
         
-        self.num = 81
-        # self.num = 85 
+        num = 81
         
         
         
         query_words, self.query_idx = get_cls_idx(name_path)
-        self.num_queries = len(query_words) -self.num
-        self.num_classes = max(self.query_idx) + 1 -self.num 
+        self.num_queries = len(query_words) -num
+        self.num_classes = max(self.query_idx) + 1 -num 
         self.query_idx = torch.Tensor(self.query_idx).to(torch.int64).to(device)
-        self.query_idx = self.query_idx[:-self.num ] 
+        self.query_idx = self.query_idx[:-num ] 
         
         
         # Initialize the logger
@@ -74,21 +73,9 @@ class CLIPForSegmentation(BaseSegmentor):
 
         query_features = []
         self.query_words = query_words
-        
-        pac_start = len(query_words) - self.num 
-        self.cls_words = query_words[:pac_start]
-        self.pac_words = query_words[pac_start:]
 
-        # with torch.no_grad():
-        #     for qw in query_words:
-        #         query = clip.tokenize([temp(qw) for temp in openai_imagenet_template]).to(device)
-        #         feature = self.net.encode_text(query)
-        #         feature /= feature.norm(dim=-1, keepdim=True)
-        #         feature = feature.mean(dim=0)
-        #         feature /= feature.norm()
-        #         query_features.append(feature.unsqueeze(0))
         with torch.no_grad():
-            for qw in self.cls_words:
+            for qw in query_words:
                 query = clip.tokenize([temp(qw) for temp in openai_imagenet_template]).to(device)
                 feature = self.net.encode_text(query)
                 feature /= feature.norm(dim=-1, keepdim=True)
@@ -96,19 +83,10 @@ class CLIPForSegmentation(BaseSegmentor):
                 feature /= feature.norm()
                 query_features.append(feature.unsqueeze(0))
                 
-            # merged cls_words 
-            merged_cls_words = [' '.join(self.cls_words)]
-                
-            for qw in self.pac_words:
-                query = clip.tokenize([temp(qw) for temp in openai_imagenet_template]).to(device)
-                feature = self.net.encode_text(query)
-                feature /= feature.norm(dim=-1, keepdim=True)
-                feature = feature.mean(dim=0)
-                feature /= feature.norm()
-                query_features.append(feature.unsqueeze(0))                
+
         
         self.query_features_ori = torch.cat(query_features, dim=0)
-        self.query_features = self.query_features_ori[:-self.num,:]
+        self.query_features = self.query_features_ori[:-num,:]
         
         
         self.dtype = self.query_features.dtype
@@ -146,35 +124,6 @@ class CLIPForSegmentation(BaseSegmentor):
         image_features = image_features[:, 1:]
         
         logits = image_features @ self.query_features_ori.T
-        
-        print("enter forward feature")
-        # #! 이 logits중에서 -> PAC에 해당하는걸 sorting해서 k개만 남기고 -> 그걸 다시 obj에 붙여서 text emb만든다음 -> 그다음 다시 logit만들기 진행 
-        # # get PAC 
-        # pac_start = len(self.query_features_ori) - self.num 
-        
-        # pac_logits = logits[..., pac_start:] #[1, 784, 81]
-        # k = 5
-        # _, indices = torch.topk(pac_logits.reshape(-1), k) #[5]         # convert indices into cls num 
-        # cls_num = [i // 784 for i in indices] #[]
-        # selected_pac_words = [self.query_words[i + pac_start] for i in cls_num ]
-        # # 하나의 문자열로 합치기 
-        # print(selected_pac_words)
-        # selected_pac_words = [' '.join(selected_pac_words)]
-        # temp_query_features = []
-        # with torch.no_grad():
-        #     for qw in self.query_words:
-        #         query = clip.tokenize([temp(selected_pac_words[0] + ' ' +qw) for temp in openai_imagenet_template]).to(self.device)
-        #         feature = self.net.encode_text(query)
-        #         feature /= feature.norm(dim=-1, keepdim=True)
-        #         feature = feature.mean(dim=0)
-        #         feature /= feature.norm()
-        #         temp_query_features.append(feature.unsqueeze(0))
-                
-        
-        # temp_query_features_ori = torch.cat(temp_query_features, dim=0)
-        
-        
-        # logits = image_features @ temp_query_features_ori.T
         patch_size = self.net.visual.patch_size
         w, h = img[0].shape[-2] // patch_size, img[0].shape[-1] // patch_size
         out_dim = logits.shape[-1]
@@ -296,7 +245,6 @@ class CLIPForSegmentation(BaseSegmentor):
 
             kl_temp_weight[:, 1:, 1:] =(torch.stack(attn_list, dim=0).sum(0) +1.0*kl_temp_ori ) / (len(kl_size_w) + 1.0)  
             kl_temp_weight[:,:,0] = 0.0    
-            
 
 
 
@@ -343,19 +291,9 @@ class CLIPForSegmentation(BaseSegmentor):
         else:
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
         ######
-        
-        return logits
-        
-        # w, h = img.shape[-2:]
-        
-        # attn_map = nn.functional.interpolate(kl_temp_weight[0, 1:, 1:].unsqueeze(0).unsqueeze(0), size=(w * h, w * h), mode='bilinear') # torch.Size([1, 1, 200704, 200704])
-        
-        # attn_map = attn_map.reshape(w, h, w, h) 
-        
-
 
        
-        # return logits, attn_map
+        return logits
 
 
     def forward_slide(self, img, img_metas, stride=112, crop_size=224):
@@ -377,7 +315,6 @@ class CLIPForSegmentation(BaseSegmentor):
         h_grids = max(h_img - h_crop + h_stride - 1, 0) // h_stride + 1
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img))
-        attn = torch.zeros((h_img, w_img, h_img, w_img)).to("cuda")
         count_mat = img.new_zeros((batch_size, 1, h_img, w_img))
         
         self.window = 0
@@ -390,16 +327,10 @@ class CLIPForSegmentation(BaseSegmentor):
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 crop_img = img[:, :, y1:y2, x1:x2]
-                crop_seg_logit, attn_map = self.forward_feature(crop_img) #torch.Size([1, 21, 448, 448]) torch.Size([12, 784, 784])
+                crop_seg_logit = self.forward_feature(crop_img)
                 preds += nn.functional.pad(crop_seg_logit,
                                (int(x1), int(preds.shape[3] - x2), int(y1),
                                 int(preds.shape[2] - y2)))
-                
-                # attn += nn.functional.pad(attn_map,
-                #                (int(x1), int(attn.shape[3] - x2), int(y1),
-                #                 int(attn.shape[2] - y2), int(x1), int(attn.shape[3] - x2), int(y1),
-                #                 int(attn.shape[2] - y2)))
-
 
                 count_mat[:, :, y1:y2, x1:x2] += 1
                 
@@ -407,9 +338,6 @@ class CLIPForSegmentation(BaseSegmentor):
         assert (count_mat == 0).sum() == 0
 
         preds = preds / count_mat
-        # reshaped_count_mat = torch.stack(count_mat[0, 0, :, :] * h_img, * w_img, dim=0).reshape(h_img, w_img)
-        # attn = attn / reshaped_count_mat
-        
         img_size = img_metas[0]['ori_shape'][:2]
         logits = nn.functional.interpolate(preds, size=img_size, mode='bilinear')
 
@@ -417,7 +345,6 @@ class CLIPForSegmentation(BaseSegmentor):
             img = nn.functional.interpolate(img, size=img_size, mode='bilinear')
             logits = self.pamr(img, logits.to(img.dtype)).to(self.dtype)
 
-        # return logits, attn
         return logits
 
     def predict(self, inputs, data_samples):
@@ -456,20 +383,19 @@ class CLIPForSegmentation(BaseSegmentor):
                 cls_index = cls_index.T.view(num_cls, num_queries, 1, 1)
                 seg_logits = (seg_logits * cls_index).max(1)[0]
                 seg_pred = seg_logits.argmax(0, keepdim=True)
-
-            if self.area_thd is not None:
-                # Force segmentations with area < self.area_thd to 0 (background)
-                predictions = nn.functional.one_hot(seg_logits.argmax(0), num_cls).to(seg_logits.dtype)
-                area_pred = predictions[:, :, 1:].sum((0, 1), keepdim=True)  # prone background
-                area_pred = (area_pred > self.area_thd * area_pred.sum()).to(seg_logits.dtype)          
-                seg_logits[1:] *= area_pred.transpose(0, -1)
             
-            seg_pred = seg_logits.argmax(0, keepdim=True) # [1, 366, 500]
-            # attn # torch.Size([1, 1, 784, 1071]) ?????? 
+            seg_pred = seg_logits.argmax(0, keepdim=True)
             
             if self.prob_thd is not None: 
                 seg_pred[seg_logits.max(0, keepdim=True)[0] < self.prob_thd] = 0
-       
+            
+            
+            
+
+            
+            
+            
+            
             data_samples[i].set_data({
                 'seg_logits':
                 PixelData(**{'data': seg_logits}),

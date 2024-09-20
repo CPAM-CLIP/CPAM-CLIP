@@ -8,7 +8,7 @@ outputs_voc21/
 work_logs/
 sam/
 coco/
-data/
+data/ 
 attn/
 images/
 *.pth
