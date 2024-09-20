@@ -407,20 +407,24 @@ class CLIPForSegmentation(BaseSegmentor):
             
             # if self.prob_thd is not None: 
             #     seg_pred[seg_logits.max(0, keepdim=True)[0] < self.prob_thd] = 0
+            torch.cuda.empty_cache()
+            with torch.no_grad():
+                _, _, attn_h, attn_w = attn_map.shape
+                _, img_h, img_w =  seg_pred.shape
+                factor = 6
+                new_h, new_w = attn_h * factor, attn_w * factor
+                attn_map = attn_map.view(1, 1, attn_h *  attn_w, attn_h *  attn_w)
+                attn_map = nn.functional.interpolate(attn_map, size=(img_h * img_w, new_h * new_w), mode='bilinear') # [366, 500, 28, 38]
                 
-            _, _, attn_h, attn_w = attn_map.shape
-            _, img_h, img_w =  seg_pred.shape
-            
-            attn = nn.functional.interpolate(attn_map.permute(2, 3, 0, 1), size=(img_h, img_w), mode='bilinear').permute(2, 3, 0, 1) # [366, 500, 28, 38]
-            
-            reshaped_seg_pred = nn.functional.interpolate(seg_pred.unsqueeze(0).to(torch.float32), size=(attn_h, attn_w), mode='nearest').to(torch.int32) # [1, 1, 28, 38]
-            
-            
-            keys = torch.unique(reshaped_seg_pred)
-            keys_map = torch.zeros((num_cls, attn_h * attn_w)).to("cuda")
-            for key in keys:
-                keys_map[key, ...] = torch.where(reshaped_seg_pred.reshape(-1) == key, True, False)
-            # keys_map = keys_map.reshape(num_cls, attn_h, attn_w).to(torch.bool)
+
+                seg_pred = nn.functional.interpolate(seg_pred.unsqueeze(0).to(torch.float32), size=(new_h, new_w), mode='nearest').to(torch.int32).view(-1) # [1, 1, 28, 38]
+                
+                
+                keys = torch.unique(seg_pred)
+                # keys_map = torch.zeros((num_cls, attn_h * attn_w)).to("cuda")
+                keys_map = torch.zeros((num_cls, new_h * new_w)).to("cuda")
+                for key in keys:
+                    keys_map[key, ...] = torch.where(seg_pred == key, True, False)
 
             
             #! version 1 : slow 
@@ -437,43 +441,30 @@ class CLIPForSegmentation(BaseSegmentor):
             #             new_seg_pred[0, h, w] = cls_weight.argmax()
             
             #! version 2: 
-            with torch.no_grad():
-                # Assuming the following variables are initialized: 
-                # seg_pred, attn, num_cls, keys, keys_map, img_h, img_w
-
-                # Pre-allocate tensor for the result
-                new_seg_pred = torch.zeros_like(seg_pred).to("cuda")
-
-                # Reshape attention to operate on the full image at once: shape [img_h * img_w, keys_dim]
-                attn_reshaped = attn.view(img_h * img_w, attn_h * attn_w)  # Combine height and width into one dimension
-                
-                # Ensure keys_map has the correct dimensions
-                keys_map_expanded = keys_map.view(num_cls, attn_h * attn_w).permute(1, 0).to("cuda")  # Adjust keys_map size
+           
+                attn_map = attn_map[0]
                 
 
-                # Perform the voting mechanism over all pixels in a vectorized way
-                # cls_weight: shape [img_h * img_w, num_cls]
+                keys_map = keys_map.permute(1, 0).to("cuda")  # Adjust keys_map size
+
                 # attn_reshaped: [img_h * img_w, 1, key_dim]
                 # keys_map_expanded: [key_dim, num_cls]
-                cls_weight = torch.einsum('hwk,kc->hwc', attn_reshaped.unsqueeze(1), keys_map_expanded)
+                new_seg_pred = torch.einsum('hwk,kc->hwc', attn_map, keys_map)
+
+                new_seg_pred = new_seg_pred.argmax(dim=-1).view(1, img_h, img_w)
                 
-                # Argmax over classes to get the predicted class for each pixel
-                new_seg_pred = cls_weight.argmax(dim=-1).view(1, img_h, img_w)
-            
-                
-            
-            # data_samples[i].set_data({
-            #     'seg_logits':
-            #     PixelData(**{'data': seg_logits}),
-            #     'pred_sem_seg':
-            #     PixelData(**{'data': seg_pred})
-            # })
+                del attn_map 
+                del keys_map
+                del seg_pred
+                torch.cuda.empty_cache()
             data_samples[i].set_data({
                 'seg_logits':
                 PixelData(**{'data': seg_logits}),
                 'pred_sem_seg':
                 PixelData(**{'data': new_seg_pred})
             })
+            
+            del new_seg_pred
 
         return data_samples
     
