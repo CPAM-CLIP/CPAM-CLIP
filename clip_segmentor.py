@@ -291,9 +291,13 @@ class CLIPForSegmentation(BaseSegmentor):
         else:
             logits = nn.functional.interpolate(logits, size=logit_size, mode='bilinear')
         ######
-
+        
+        w, h = img.shape[-2:] # 448, 448
+        
+        attn_map = kl_temp_weight[0, 1:, 1:].reshape(w_attn, h_attn, w_attn, h_attn) # torch.Size([28, 28, 28, 28]) 
+        
        
-        return logits
+        return logits, attn_map
 
 
     def forward_slide(self, img, img_metas, stride=112, crop_size=224):
@@ -316,6 +320,9 @@ class CLIPForSegmentation(BaseSegmentor):
         w_grids = max(w_img - w_crop + w_stride - 1, 0) // w_stride + 1
         preds = img.new_zeros((batch_size, out_channels, h_img, w_img))
         count_mat = img.new_zeros((batch_size, 1, h_img, w_img))
+        factor = 16
+        attn_h, attn_w = int(h_img/factor), int(w_img/factor)
+        attn = torch.zeros((attn_h, attn_w, attn_h, attn_w)).to("cuda")
         
         self.window = 0
         for h_idx in range(h_grids):
@@ -327,10 +334,15 @@ class CLIPForSegmentation(BaseSegmentor):
                 y1 = max(y2 - h_crop, 0)
                 x1 = max(x2 - w_crop, 0)
                 crop_img = img[:, :, y1:y2, x1:x2]
-                crop_seg_logit = self.forward_feature(crop_img)
+                crop_seg_logit, attn_map = self.forward_feature(crop_img)
                 preds += nn.functional.pad(crop_seg_logit,
                                (int(x1), int(preds.shape[3] - x2), int(y1),
                                 int(preds.shape[2] - y2)))
+                
+                attn += nn.functional.pad(attn_map,
+                               (int(x1/factor), int(attn.shape[3] - x2/factor), int(y1/factor),
+                                int(attn.shape[2] - y2/factor), int(x1/factor), int(attn.shape[3] - x2/factor), int(y1/factor),
+                                int(attn.shape[2] - y2/factor)))
 
                 count_mat[:, :, y1:y2, x1:x2] += 1
                 
@@ -338,14 +350,21 @@ class CLIPForSegmentation(BaseSegmentor):
         assert (count_mat == 0).sum() == 0
 
         preds = preds / count_mat
+        reshaped_count_mat = nn.functional.interpolate(count_mat, size=(attn_h, attn_w), mode='bilinear')[0, 0, :, :]
+        reshaped_count_mat = torch.stack([reshaped_count_mat] * attn_h * attn_w, dim=0).reshape(attn_h, attn_w, attn_h, attn_w)
+        
+        attn = attn / reshaped_count_mat
+
+        
         img_size = img_metas[0]['ori_shape'][:2]
         logits = nn.functional.interpolate(preds, size=img_size, mode='bilinear')
+        
 
         if self.pamr:
             img = nn.functional.interpolate(img, size=img_size, mode='bilinear')
             logits = self.pamr(img, logits.to(img.dtype)).to(self.dtype)
 
-        return logits
+        return logits, attn
 
     def predict(self, inputs, data_samples):
         if data_samples is not None:
@@ -364,13 +383,13 @@ class CLIPForSegmentation(BaseSegmentor):
         self.slide += 1
         
         if self.slide_crop > 0:
-            seg_logits = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop)
+            seg_logits, attn_map = self.forward_slide(inputs, batch_img_metas, self.slide_stride, self.slide_crop)
         else:
-            seg_logits = self.forward_feature(inputs, batch_img_metas[0]['ori_shape'])
+            seg_logits, attn_map = self.forward_feature(inputs, batch_img_metas[0]['ori_shape'])
 
-        return self.postprocess_result(seg_logits, data_samples)
+        return self.postprocess_result(seg_logits, data_samples, attn_map)
     
-    def postprocess_result(self, seg_logits, data_samples):
+    def postprocess_result(self, seg_logits, data_samples, attn_map):
         batch_size = seg_logits.shape[0]
         for i in range(batch_size):
             seg_logits = seg_logits[i] * self.logit_scale
@@ -386,21 +405,74 @@ class CLIPForSegmentation(BaseSegmentor):
             
             seg_pred = seg_logits.argmax(0, keepdim=True)
             
-            if self.prob_thd is not None: 
-                seg_pred[seg_logits.max(0, keepdim=True)[0] < self.prob_thd] = 0
+            # if self.prob_thd is not None: 
+            #     seg_pred[seg_logits.max(0, keepdim=True)[0] < self.prob_thd] = 0
+                
+            _, _, attn_h, attn_w = attn_map.shape
+            _, img_h, img_w =  seg_pred.shape
+            
+            attn = nn.functional.interpolate(attn_map.permute(2, 3, 0, 1), size=(img_h, img_w), mode='bilinear').permute(2, 3, 0, 1) # [366, 500, 28, 38]
+            
+            reshaped_seg_pred = nn.functional.interpolate(seg_pred.unsqueeze(0).to(torch.float32), size=(attn_h, attn_w), mode='nearest').to(torch.int32) # [1, 1, 28, 38]
             
             
-            
+            keys = torch.unique(reshaped_seg_pred)
+            keys_map = torch.zeros((num_cls, attn_h * attn_w)).to("cuda")
+            for key in keys:
+                keys_map[key, ...] = torch.where(reshaped_seg_pred.reshape(-1) == key, True, False)
+            # keys_map = keys_map.reshape(num_cls, attn_h, attn_w).to(torch.bool)
 
             
+            #! version 1 : slow 
+            # with torch.no_grad():
+            #     keys_map = keys_map.to(torch.bool)
+            #     new_seg_pred = torch.zeros_like(seg_pred).to("cuda")
+            #     for h in range(img_h):
+            #         for w in range(img_w):
+            #             # voting here! 
+            #             selected_attn = attn[h, w, :, :].reshape(-1) # [28, 38]
+            #             cls_weight = torch.zeros((num_cls))
+            #             for key in keys:
+            #                 cls_weight[key] = selected_attn[keys_map[key, ...]].sum()
+            #             new_seg_pred[0, h, w] = cls_weight.argmax()
             
+            #! version 2: 
+            with torch.no_grad():
+                # Assuming the following variables are initialized: 
+                # seg_pred, attn, num_cls, keys, keys_map, img_h, img_w
+
+                # Pre-allocate tensor for the result
+                new_seg_pred = torch.zeros_like(seg_pred).to("cuda")
+
+                # Reshape attention to operate on the full image at once: shape [img_h * img_w, keys_dim]
+                attn_reshaped = attn.view(img_h * img_w, attn_h * attn_w)  # Combine height and width into one dimension
+                
+                # Ensure keys_map has the correct dimensions
+                keys_map_expanded = keys_map.view(num_cls, attn_h * attn_w).permute(1, 0).to("cuda")  # Adjust keys_map size
+                
+
+                # Perform the voting mechanism over all pixels in a vectorized way
+                # cls_weight: shape [img_h * img_w, num_cls]
+                # attn_reshaped: [img_h * img_w, 1, key_dim]
+                # keys_map_expanded: [key_dim, num_cls]
+                cls_weight = torch.einsum('hwk,kc->hwc', attn_reshaped.unsqueeze(1), keys_map_expanded)
+                
+                # Argmax over classes to get the predicted class for each pixel
+                new_seg_pred = cls_weight.argmax(dim=-1).view(1, img_h, img_w)
             
+                
             
+            # data_samples[i].set_data({
+            #     'seg_logits':
+            #     PixelData(**{'data': seg_logits}),
+            #     'pred_sem_seg':
+            #     PixelData(**{'data': seg_pred})
+            # })
             data_samples[i].set_data({
                 'seg_logits':
                 PixelData(**{'data': seg_logits}),
                 'pred_sem_seg':
-                PixelData(**{'data': seg_pred})
+                PixelData(**{'data': new_seg_pred})
             })
 
         return data_samples
