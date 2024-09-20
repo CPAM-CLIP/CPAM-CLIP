@@ -495,7 +495,10 @@ class VisionTransformer(nn.Module):
         else:
             attn_weights = torch.bmm(q * scale, k.transpose(1, 2))
             attn_weights = F.softmax(attn_weights, dim=-1)
-
+            
+        # attn_weights[:, :, :] = attn_weights[11, :, :]
+        # attn_weights[:, :, :] = attn_weights[10, :, :]
+        
         if return_attn:
             return attn_weights
         

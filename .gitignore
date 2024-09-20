@@ -17,3 +17,9 @@ images/
 temp/
 
 __pycache__/
+
+hyper-coco/
+hyper-context/
+hyper-coco_old/
+hyper-context_old/
+hyperparameter/
